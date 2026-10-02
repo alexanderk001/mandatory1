@@ -53,7 +53,10 @@ class Poisson2D:
         A : scipy sparse LIL matrix
             The vectorized Laplace operator
         """
-        raise NotImplementedError("The laplace method is not implemented yet.")
+        dx = self.p.L / N
+        D2 = self.p.D2(N, dx)
+        I = sparse.eye(N + 1, format="lil")
+        return sparse.kron(D2, I, format="lil") + sparse.kron(I, D2, format="lil")
 
     def assemble(
         self, N: int, f: sp.Expr, ue: sp.Expr
@@ -84,7 +87,23 @@ class Poisson2D:
         Dirichlet boundary conditions using the exact solution ue.
 
         """
-        raise NotImplementedError("The assemble method is not implemented yet.")
+        xij, yij = self.create_mesh(N)
+
+        f_mesh = self.meshfunction(f, xij, yij)
+        ue_mesh = self.meshfunction(ue, xij, yij)
+
+        b = np.broadcast_to(f_mesh, (N + 1, N + 1)).ravel().copy()
+        ue_flat = np.broadcast_to(ue_mesh, (N + 1, N + 1)).ravel()
+
+        A = self.laplace(N)
+        bnds = self.get_boundary_indices(N)
+
+        for idx in bnds:
+            A[idx] = 0
+            A[idx, idx] = 1.0
+            b[idx] = ue_flat[idx]
+
+        return A.tocsr(), b
 
     def meshfunction(self, u: sp.Expr, xij: np.ndarray, yij: np.ndarray) -> np.ndarray:
         """Return Sympy function as mesh function
@@ -97,13 +116,14 @@ class Poisson2D:
         -------
         array - The input function as a mesh function
         """
-        raise NotImplementedError("The meshfunction method is not implemented yet.")
+        f_num = sp.lambdify((x, y), u, modules="numpy")
+        return f_num(xij, yij)
 
     def get_boundary_indices(self, N: int) -> np.ndarray:
         """Return indices of vectorized matrix that belongs to the boundary"""
-        raise NotImplementedError(
-            "The get_boundary_indices method is not implemented yet."
-        )
+        B = np.ones((N + 1, N + 1), dtype=bool)
+        B[1:-1, 1:-1] = False
+        return np.where(B.ravel())[0]
 
     def l2_error(self, u: np.ndarray, ue: sp.Expr) -> float:
         """Return l2-error
@@ -120,7 +140,11 @@ class Poisson2D:
         float - The l2-error
 
         """
-        raise NotImplementedError("The l2_error method is not implemented yet.")
+        N = u.shape[0] - 1
+        dx = self.p.L / N
+        xij, yij = self.create_mesh(N)
+        ue_mesh = np.broadcast_to(self.meshfunction(ue, xij, yij), (N + 1, N + 1))
+        return float(np.sqrt(dx**2 * np.sum((ue_mesh - u)**2)))
 
     def __call__(self, N: int, ue: sp.Expr) -> np.ndarray:
         """Solve Poisson's equation with a given manufactured solution
@@ -165,7 +189,25 @@ class Poisson2D:
         The value of u(x, y)
 
         """
-        raise NotImplementedError("The eval method is not implemented yet.")
+        N = U.shape[0] - 1
+        h = self.p.L / N
+        
+        i = int(np.floor(x / h))
+        j = int(np.floor(y / h))
+
+        i = min(max(i, 0), N - 1)
+        j = min(max(j, 0), N - 1)
+
+        x_local = (x - i * h) / h
+        y_local = (y - j * h) / h
+
+        u_interp = (
+            (1 - x_local) * (1 - y_local) * U[i, j]
+            + x_local * (1 - y_local) * U[i + 1, j]
+            + (1 - x_local) * y_local * U[i, j + 1]
+            + x_local * y_local * U[i + 1, j + 1]
+        )
+        return float(u_interp)
 
 
 def test_convergence_poisson2d():
